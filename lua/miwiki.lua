@@ -239,12 +239,67 @@ local function move_to_note(opts)
 	end)
 end
 
+local function toggle_task_line(line)
+	local pfx, mark, sfx
+
+	pfx, mark, sfx = line:match('^(%s*[%-%*%+]%s+%[)(.)(%].*)$')
+	if not pfx then
+		pfx, mark, sfx = line:match('^(%s*%d+%.%s+%[)(.)(%].*)$')
+	end
+	if not pfx then
+		return nil
+	end
+	mark = (mark == ' ') and 'x' or ' '
+	return pfx .. mark .. sfx
+end
+
+local function toggle_visual_tasks()
+	local a, b, sr, sc, er, ec, mode, line, sel, lines, changed, new_l
+
+	mode = vim.fn.mode()
+	a = vim.fn.getpos('v')
+	b = vim.fn.getpos('.')
+	sr, sc = a[2], a[3]
+	er, ec = b[2], b[3]
+	if sr > er or (sr == er and sc > ec) then
+		sr, sc, er, ec = er, ec, sr, sc
+	end
+	if mode == 'v' and sr == er then
+		line = vim.fn.getline(sr)
+		sel = line:sub(sc, ec)
+		if not sel:match('%[[%sxX]%]') and sc > 6 then
+			return false
+		end
+	end
+	lines = vim.api.nvim_buf_get_lines(0, sr - 1, er, false)
+	changed = false
+	for i, l in ipairs(lines) do
+		new_l = toggle_task_line(l)
+		if new_l then
+			lines[i] = new_l
+			changed = true
+		end
+	end
+	if not changed then
+		return false
+	end
+	vim.api.nvim_feedkeys('\27', 'nx', false)
+	vim.api.nvim_buf_set_lines(0, sr - 1, er, false, lines)
+	return true
+end
+
 local function follow_or_create()
-	local target, s, e, word
+	local target, s, e, word, line, new_l
 
 	target = wikilink_at_cursor()
 	if target then
 		open_page(target)
+		return true
+	end
+	line = vim.api.nvim_get_current_line()
+	new_l = toggle_task_line(line)
+	if new_l then
+		vim.api.nvim_set_current_line(new_l)
 		return true
 	end
 	s, e, word = word_at_cursor()
@@ -263,6 +318,9 @@ local function follow_or_create_visual()
 	if target then
 		vim.api.nvim_feedkeys('\27', 'nx', false)
 		open_page(target)
+		return true
+	end
+	if toggle_visual_tasks() then
 		return true
 	end
 	s, e, text = visual_range()
