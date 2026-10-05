@@ -206,11 +206,23 @@ local function do_move(opts, name)
 end
 
 local function move_to_note(opts)
-	local arg
+	local arg, in_visual, p1, p2
 
 	opts = opts or {}
-	if vim.fn.mode():match('^[vV\22]') then
+	in_visual = vim.fn.mode():match('^[vV\22]') ~= nil
+	if in_visual then
 		vim.api.nvim_feedkeys('\27', 'nx', false)
+	end
+	if not opts.line1 then
+		if in_visual then
+			p1 = vim.fn.getpos("'<")
+			p2 = vim.fn.getpos("'>")
+			opts.line1 = p1[2]
+			opts.line2 = p2[2]
+		else
+			opts.line1 = vim.fn.line('.')
+			opts.line2 = opts.line1
+		end
 	end
 	arg = opts.args and vim.trim(opts.args) or ''
 	if arg ~= '' then
@@ -283,6 +295,14 @@ vim.api.nvim_create_autocmd('FileType', {
 		vim.keymap.set({ 'n', 'v' }, '<CR>', smart_action, {
 			buffer = true,
 			desc = 'miwiki: follow or create link',
+		})
+		vim.keymap.set({ 'n', 'v' }, '<leader>mm', move_to_note, {
+			buffer = true,
+			desc = 'miwiki: move to note',
+		})
+		vim.keymap.set({ 'n', 'v' }, '<leader>me', move_to_note, {
+			buffer = true,
+			desc = 'miwiki: extract to note',
 		})
 	end,
 })
