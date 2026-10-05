@@ -98,24 +98,96 @@ local function page_path(name)
 	return vim.fn.expand('%:p:h') .. '/' .. name .. '.md'
 end
 
-local function open_page(name)
+local function open_page(name, content_lines)
 	local path, title, empty
 
 	path = page_path(name)
 	empty = vim.fn.filereadable(path) == 0
-	if vim.bo.modified then
+	if vim.bo.modified and vim.fn.expand('%') ~= '' then
 		vim.cmd.write()
 	end
 	vim.fn.mkdir(vim.fn.fnamemodify(path, ':h'), 'p')
 	vim.cmd.edit(path)
 	empty = empty or (vim.fn.line('$') == 1
 	    and vim.api.nvim_get_current_line() == '')
+	title = name:match('([^/]+)$') or name
 	if empty then
-		title = name:match('([^/]+)$') or name
-		vim.api.nvim_buf_set_lines(0, 0, -1, false, {
-			'# ' .. title, '', '',
-		})
+		local lines = { '# ' .. title, '' }
+		if content_lines and #content_lines > 0 then
+			for _, l in ipairs(content_lines) do
+				table.insert(lines, l)
+			end
+		else
+			table.insert(lines, '')
+		end
+		vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
 		vim.api.nvim_win_set_cursor(0, { 3, 0 })
+	elseif content_lines and #content_lines > 0 then
+		local count = vim.api.nvim_buf_line_count(0)
+		local lines = { '' }
+		for _, l in ipairs(content_lines) do
+			table.insert(lines, l)
+		end
+		vim.api.nvim_buf_set_lines(0, count, count, false, lines)
+		vim.api.nvim_win_set_cursor(0, { count + 2, 0 })
+	end
+end
+
+local function move_to_note(opts)
+	opts = opts or {}
+	local in_visual = vim.fn.mode():match('^[vV\22]') ~= nil
+	if in_visual then
+		vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes('<Esc>', true, false, true), 'nx', false)
+	end
+
+	local p1 = vim.fn.getpos("'<")
+	local p2 = vim.fn.getpos("'>")
+	local mode = vim.fn.visualmode()
+
+	local line1 = opts.line1 or (in_visual and p1[2]) or vim.fn.line('.')
+	local line2 = opts.line2 or (in_visual and p2[2]) or line1
+
+	local is_charwise = (mode == 'v') and (p1[2] == line1) and (p2[2] == line2)
+
+	local function execute_move(name)
+		name = vim.trim(name):gsub('%.md$', '')
+		if name == '' then
+			return
+		end
+
+		local content_lines = {}
+		local link = '[[' .. name .. ']]'
+
+		if is_charwise then
+			if p1[2] > p2[2] or (p1[2] == p2[2] and p1[3] > p2[3]) then
+				p1, p2 = p2, p1
+			end
+			local end_line = vim.fn.getline(p2[2])
+			local end_col = p2[3]
+			if vim.o.selection ~= 'exclusive' then
+				local next_char = vim.fn.strcharpart(end_line:sub(p2[3]), 0, 1)
+				end_col = end_col + #next_char - 1
+			end
+			content_lines = vim.api.nvim_buf_get_text(0, p1[2] - 1, p1[3] - 1, p2[2] - 1, end_col, {})
+			vim.api.nvim_buf_set_text(0, p1[2] - 1, p1[3] - 1, p2[2] - 1, end_col, { link })
+		else
+			content_lines = vim.api.nvim_buf_get_lines(0, line1 - 1, line2, false)
+			vim.api.nvim_buf_set_lines(0, line1 - 1, line2, false, { link })
+		end
+
+		open_page(name, content_lines)
+	end
+
+	local arg_name = opts.args and vim.trim(opts.args) or ''
+	if arg_name ~= '' then
+		execute_move(arg_name)
+	else
+		vim.ui.input({ prompt = 'Note name: ' }, function(input)
+			if not input then
+				return
+			end
+			execute_move(input)
+		end)
 	end
 end
 
@@ -178,3 +250,12 @@ vim.api.nvim_create_autocmd('FileType', {
 		})
 	end,
 })
+
+local M = {
+	follow_or_create = follow_or_create,
+	follow_or_create_visual = follow_or_create_visual,
+	smart_action = smart_action,
+	move_to_note = move_to_note,
+}
+
+return M
