@@ -98,8 +98,8 @@ local function page_path(name)
 	return vim.fn.expand('%:p:h') .. '/' .. name .. '.md'
 end
 
-local function open_page(name, content_lines)
-	local path, title, empty
+local function open_page(name, content)
+	local path, title, empty, lines, count, last
 
 	path = page_path(name)
 	empty = vim.fn.filereadable(path) == 0
@@ -112,9 +112,9 @@ local function open_page(name, content_lines)
 	    and vim.api.nvim_get_current_line() == '')
 	title = name:match('([^/]+)$') or name
 	if empty then
-		local lines = { '# ' .. title, '' }
-		if content_lines and #content_lines > 0 then
-			for _, l in ipairs(content_lines) do
+		lines = { '# ' .. title, '' }
+		if content and #content > 0 then
+			for _, l in ipairs(content) do
 				table.insert(lines, l)
 			end
 		else
@@ -122,34 +122,37 @@ local function open_page(name, content_lines)
 		end
 		vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
 		vim.api.nvim_win_set_cursor(0, { 3, 0 })
-	elseif content_lines and #content_lines > 0 then
-		local count = vim.api.nvim_buf_line_count(0)
-		local last_line = vim.api.nvim_buf_get_lines(0, count - 1, count, false)[1] or ''
-		local lines = {}
-		if last_line ~= '' then
-			table.insert(lines, '')
-		end
-		for _, l in ipairs(content_lines) do
-			table.insert(lines, l)
-		end
-		vim.api.nvim_buf_set_lines(0, count, count, false, lines)
-		local target_row = count + (last_line ~= '' and 2 or 1)
-		vim.api.nvim_win_set_cursor(0, { target_row, 0 })
+		return
 	end
+	if not content or #content == 0 then
+		return
+	end
+	count = vim.api.nvim_buf_line_count(0)
+	last = vim.api.nvim_buf_get_lines(0, count - 1, count, false)[1] or ''
+	lines = {}
+	if last ~= '' then
+		table.insert(lines, '')
+	end
+	for _, l in ipairs(content) do
+		table.insert(lines, l)
+	end
+	vim.api.nvim_buf_set_lines(0, count, count, false, lines)
+	vim.api.nvim_win_set_cursor(0, { count + (last ~= '' and 2 or 1), 0 })
 end
 
-local function complete_notes(arg_lead)
-	local dir = vim.fn.expand('%:p:h')
-	local files = vim.fn.globpath(dir, '**/*.md', false, true)
-	local current_file = vim.fn.expand('%:p')
-	local prefix = dir .. '/'
-	local matches = {}
+local function complete_notes(lead)
+	local dir, files, cur, pfx, matches, note
 
-	arg_lead = (arg_lead or ''):lower()
+	dir = vim.fn.expand('%:p:h')
+	files = vim.fn.globpath(dir, '**/*.md', false, true)
+	cur = vim.fn.expand('%:p')
+	pfx = dir .. '/'
+	matches = {}
+	lead = (lead or ''):lower()
 	for _, f in ipairs(files) do
-		if f ~= current_file and f:sub(1, #prefix) == prefix then
-			local note = f:sub(#prefix + 1):gsub('%.md$', '')
-			if arg_lead == '' or note:lower():find(arg_lead, 1, true) == 1 then
+		if f ~= cur and f:sub(1, #pfx) == pfx then
+			note = f:sub(#pfx + 1):gsub('%.md$', '')
+			if lead == '' or note:lower():find(lead, 1, true) == 1 then
 				table.insert(matches, note)
 			end
 		end
@@ -158,65 +161,70 @@ local function complete_notes(arg_lead)
 	return matches
 end
 
+local function cut_selection(opts, name)
+	local p1, p2, mode, l1, l2, charwise, eline, ecol, nchar, lines, link
+
+	p1 = vim.fn.getpos("'<")
+	p2 = vim.fn.getpos("'>")
+	mode = vim.fn.visualmode()
+	l1 = opts.line1 or p1[2]
+	l2 = opts.line2 or p2[2]
+	charwise = (mode == 'v') and (p1[2] == l1) and (p2[2] == l2)
+	link = '[[' .. name .. ']]'
+
+	if charwise then
+		if p1[2] > p2[2] or (p1[2] == p2[2] and p1[3] > p2[3]) then
+			p1, p2 = p2, p1
+		end
+		eline = vim.fn.getline(p2[2])
+		ecol = p2[3]
+		if vim.o.selection ~= 'exclusive' then
+			nchar = vim.fn.strcharpart(eline:sub(p2[3]), 0, 1)
+			ecol = ecol + #nchar - 1
+		end
+		lines = vim.api.nvim_buf_get_text(0, p1[2] - 1, p1[3] - 1,
+		    p2[2] - 1, ecol, {})
+		vim.api.nvim_buf_set_text(0, p1[2] - 1, p1[3] - 1,
+		    p2[2] - 1, ecol, { link })
+		return lines
+	end
+
+	lines = vim.api.nvim_buf_get_lines(0, l1 - 1, l2, false)
+	vim.api.nvim_buf_set_lines(0, l1 - 1, l2, false, { link })
+	return lines
+end
+
+local function do_move(opts, name)
+	local lines
+
+	name = vim.trim(name):gsub('%.md$', '')
+	if name == '' then
+		return
+	end
+	lines = cut_selection(opts, name)
+	open_page(name, lines)
+end
+
 local function move_to_note(opts)
+	local arg
+
 	opts = opts or {}
-	local in_visual = vim.fn.mode():match('^[vV\22]') ~= nil
-	if in_visual then
-		vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes('<Esc>', true, false, true), 'nx', false)
+	if vim.fn.mode():match('^[vV\22]') then
+		vim.api.nvim_feedkeys('\27', 'nx', false)
 	end
-
-	local p1 = vim.fn.getpos("'<")
-	local p2 = vim.fn.getpos("'>")
-	local mode = vim.fn.visualmode()
-
-	local line1 = opts.line1 or (in_visual and p1[2]) or vim.fn.line('.')
-	local line2 = opts.line2 or (in_visual and p2[2]) or line1
-
-	local is_charwise = (mode == 'v') and (p1[2] == line1) and (p2[2] == line2)
-
-	local function execute_move(name)
-		name = vim.trim(name):gsub('%.md$', '')
-		if name == '' then
-			return
+	arg = opts.args and vim.trim(opts.args) or ''
+	if arg ~= '' then
+		do_move(opts, arg)
+		return
+	end
+	vim.ui.input({
+		prompt = 'Note name: ',
+		completion = 'customlist,v:lua.require"miwiki".complete_notes',
+	}, function(input)
+		if input then
+			do_move(opts, input)
 		end
-
-		local content_lines = {}
-		local link = '[[' .. name .. ']]'
-
-		if is_charwise then
-			if p1[2] > p2[2] or (p1[2] == p2[2] and p1[3] > p2[3]) then
-				p1, p2 = p2, p1
-			end
-			local end_line = vim.fn.getline(p2[2])
-			local end_col = p2[3]
-			if vim.o.selection ~= 'exclusive' then
-				local next_char = vim.fn.strcharpart(end_line:sub(p2[3]), 0, 1)
-				end_col = end_col + #next_char - 1
-			end
-			content_lines = vim.api.nvim_buf_get_text(0, p1[2] - 1, p1[3] - 1, p2[2] - 1, end_col, {})
-			vim.api.nvim_buf_set_text(0, p1[2] - 1, p1[3] - 1, p2[2] - 1, end_col, { link })
-		else
-			content_lines = vim.api.nvim_buf_get_lines(0, line1 - 1, line2, false)
-			vim.api.nvim_buf_set_lines(0, line1 - 1, line2, false, { link })
-		end
-
-		open_page(name, content_lines)
-	end
-
-	local arg_name = opts.args and vim.trim(opts.args) or ''
-	if arg_name ~= '' then
-		execute_move(arg_name)
-	else
-		vim.ui.input({
-			prompt = 'Note name: ',
-			completion = 'customlist,v:lua.require"miwiki".complete_notes',
-		}, function(input)
-			if not input then
-				return
-			end
-			execute_move(input)
-		end)
-	end
+	end)
 end
 
 local function follow_or_create()
