@@ -124,13 +124,38 @@ local function open_page(name, content_lines)
 		vim.api.nvim_win_set_cursor(0, { 3, 0 })
 	elseif content_lines and #content_lines > 0 then
 		local count = vim.api.nvim_buf_line_count(0)
-		local lines = { '' }
+		local last_line = vim.api.nvim_buf_get_lines(0, count - 1, count, false)[1] or ''
+		local lines = {}
+		if last_line ~= '' then
+			table.insert(lines, '')
+		end
 		for _, l in ipairs(content_lines) do
 			table.insert(lines, l)
 		end
 		vim.api.nvim_buf_set_lines(0, count, count, false, lines)
-		vim.api.nvim_win_set_cursor(0, { count + 2, 0 })
+		local target_row = count + (last_line ~= '' and 2 or 1)
+		vim.api.nvim_win_set_cursor(0, { target_row, 0 })
 	end
+end
+
+local function complete_notes(arg_lead)
+	local dir = vim.fn.expand('%:p:h')
+	local files = vim.fn.globpath(dir, '**/*.md', false, true)
+	local current_file = vim.fn.expand('%:p')
+	local prefix = dir .. '/'
+	local matches = {}
+
+	arg_lead = (arg_lead or ''):lower()
+	for _, f in ipairs(files) do
+		if f ~= current_file and f:sub(1, #prefix) == prefix then
+			local note = f:sub(#prefix + 1):gsub('%.md$', '')
+			if arg_lead == '' or note:lower():find(arg_lead, 1, true) == 1 then
+				table.insert(matches, note)
+			end
+		end
+	end
+	table.sort(matches)
+	return matches
 end
 
 local function move_to_note(opts)
@@ -182,7 +207,10 @@ local function move_to_note(opts)
 	if arg_name ~= '' then
 		execute_move(arg_name)
 	else
-		vim.ui.input({ prompt = 'Note name: ' }, function(input)
+		vim.ui.input({
+			prompt = 'Note name: ',
+			completion = 'customlist,v:lua.require"miwiki".complete_notes',
+		}, function(input)
 			if not input then
 				return
 			end
@@ -256,6 +284,7 @@ local M = {
 	follow_or_create_visual = follow_or_create_visual,
 	smart_action = smart_action,
 	move_to_note = move_to_note,
+	complete_notes = complete_notes,
 }
 
 return M
