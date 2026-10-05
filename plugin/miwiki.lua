@@ -10,12 +10,17 @@ vim.g.loaded_miwiki = 1
 
 local miwiki = require('miwiki')
 
+local function complete_notes(arg_lead)
+	return miwiki.complete_notes(arg_lead)
+end
+
 vim.api.nvim_create_user_command('MiwikiMove', function(opts)
 	miwiki.move_to_note(opts)
 end, {
 	range = true,
 	nargs = '?',
-	desc = 'Move selected content to a new note',
+	complete = complete_notes,
+	desc = 'Move selected content to a note',
 })
 
 vim.api.nvim_create_user_command('MiwikiExtract', function(opts)
@@ -23,5 +28,6 @@ vim.api.nvim_create_user_command('MiwikiExtract', function(opts)
 end, {
 	range = true,
 	nargs = '?',
-	desc = 'Extract selected content to a new note',
+	complete = complete_notes,
+	desc = 'Extract selected content to a note',
 })
