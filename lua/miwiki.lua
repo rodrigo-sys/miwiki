@@ -296,13 +296,9 @@ vim.api.nvim_create_autocmd('FileType', {
 			buffer = true,
 			desc = 'miwiki: follow or create link',
 		})
-		vim.keymap.set({ 'n', 'v' }, '<leader>mm', move_to_note, {
+		vim.keymap.set({ 'n', 'v' }, '<leader>nm', move_to_note, {
 			buffer = true,
 			desc = 'miwiki: move to note',
-		})
-		vim.keymap.set({ 'n', 'v' }, '<leader>me', move_to_note, {
-			buffer = true,
-			desc = 'miwiki: extract to note',
 		})
 	end,
 })
