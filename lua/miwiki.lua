@@ -18,24 +18,6 @@ local function parse_target(inner)
 	return page
 end
 
-local function wikilink_at_cursor()
-	local line, col, from, s, e, inner
-
-	line = vim.api.nvim_get_current_line()
-	col = vim.api.nvim_win_get_cursor(0)[2] + 1
-	from = 1
-	while true do
-		s, e, inner = line:find('%[%[([^%]]+)%]%]', from)
-		if not s then
-			return nil
-		end
-		if col >= s and col <= e then
-			return parse_target(inner)
-		end
-		from = e + 1
-	end
-end
-
 local function word_at_cursor()
 	local line, col, s, e
 
@@ -138,6 +120,80 @@ local function open_page(name, content)
 	end
 	vim.api.nvim_buf_set_lines(0, count, count, false, lines)
 	vim.api.nvim_win_set_cursor(0, { count + (last ~= '' and 2 or 1), 0 })
+end
+
+local function is_url(target)
+	local tld
+
+	if target:match('^%a[%w+.-]*://') or target:match('^www%.')
+	    or target:match('^mailto:') then
+		return true
+	end
+	tld = target:match('^[%w_.-]+%.(%a+)[/#]?')
+	if tld then
+		tld = tld:lower()
+		if tld == 'com' or tld == 'org' or tld == 'net' or tld == 'io'
+		    or tld == 'dev' or tld == 'app' or tld == 'ai' or tld == 'co'
+		    or tld == 'edu' or tld == 'gov' or tld == 'me' or tld == 'html'
+		    or tld == 'htm' then
+			return true
+		end
+	end
+	return false
+end
+
+local function open_link(target)
+	local clean, ext, page, url, path
+
+	clean = target:match('^([^#]+)') or target
+	if is_url(target) then
+		url = (target:match('^%a+://') or target:match('^mailto:'))
+		    and target or ('https://' .. target)
+		vim.ui.open(url)
+		return true
+	end
+	ext = clean:match('%.(%w+)$')
+	if ext and ext:lower() ~= 'md' then
+		path = vim.fs.normalize(vim.fn.expand('%:p:h') .. '/' .. clean)
+		vim.ui.open(path)
+		return true
+	end
+	page = parse_target(target)
+	if page then
+		open_page(page)
+		return true
+	end
+	return false
+end
+
+local function link_at_cursor()
+	local line, col, from, s, e, inner, text, target
+
+	line = vim.api.nvim_get_current_line()
+	col = vim.api.nvim_win_get_cursor(0)[2] + 1
+	from = 1
+	while true do
+		s, e, inner = line:find('%[%[([^%]]+)%]%]', from)
+		if not s then
+			break
+		end
+		if col >= s and col <= e then
+			return vim.trim(inner)
+		end
+		from = e + 1
+	end
+	from = 1
+	while true do
+		s, e, text, target = line:find('%[([^%]]+)%]%(([^%)]+)%)', from)
+		if not s then
+			break
+		end
+		if col >= s and col <= e then
+			return vim.trim(target)
+		end
+		from = e + 1
+	end
+	return nil
 end
 
 local function complete_notes(lead)
@@ -291,10 +347,9 @@ end
 local function follow_or_create()
 	local target, s, e, word, line, new_l
 
-	target = wikilink_at_cursor()
+	target = link_at_cursor()
 	if target then
-		open_page(target)
-		return true
+		return open_link(target)
 	end
 	line = vim.api.nvim_get_current_line()
 	new_l = toggle_task_line(line)
@@ -314,11 +369,10 @@ end
 local function follow_or_create_visual()
 	local target, s, e, text
 
-	target = wikilink_at_cursor()
+	target = link_at_cursor()
 	if target then
 		vim.api.nvim_feedkeys('\27', 'nx', false)
-		open_page(target)
-		return true
+		return open_link(target)
 	end
 	if toggle_visual_tasks() then
 		return true
