@@ -76,9 +76,137 @@ local function visual_range()
 	return sc, ec, text
 end
 
-local function page_path(name)
-	return vim.fn.expand('%:p:h') .. '/' .. name .. '.md'
+local function default_vault_dir()
+	return vim.fs.normalize(vim.fn.expand(vim.g.miwiki_vault_dir or '~/notes'))
 end
+
+local function registry_file()
+	return vim.fn.stdpath('state') .. '/miwiki_vaults.json'
+end
+
+local function load_registered_vaults()
+	local path, f, content, ok, data
+
+	path = registry_file()
+	if vim.fn.filereadable(path) == 0 then
+		return {}
+	end
+	f = io.open(path, 'r')
+	if not f then
+		return {}
+	end
+	content = f:read('*a')
+	f:close()
+	ok, data = pcall(vim.json.decode, content)
+	if not ok or type(data) ~= 'table' then
+		return {}
+	end
+	return data
+end
+
+local function save_registered_vaults(vaults)
+	local path, dir, ok, json, f
+
+	path = registry_file()
+	dir = vim.fn.fnamemodify(path, ':h')
+	vim.fn.mkdir(dir, 'p')
+	ok, json = pcall(vim.json.encode, vaults)
+	if not ok then
+		return
+	end
+	f = io.open(path, 'w')
+	if f then
+		f:write(json)
+		f:close()
+	end
+end
+
+local function register_vault(dir)
+	local list, normalized, seen, new_list
+
+	normalized = vim.fs.normalize(dir)
+	list = load_registered_vaults()
+	seen = {}
+	new_list = { normalized }
+	seen[normalized] = true
+	for _, p in ipairs(list) do
+		if not seen[p] and vim.fn.isdirectory(p) == 1 then
+			table.insert(new_list, p)
+			seen[p] = true
+		end
+	end
+	save_registered_vaults(new_list)
+end
+
+local function list_vaults()
+	local base, subdirs, reg, vaults, seen, name
+
+	base = default_vault_dir()
+	vaults = {}
+	seen = {}
+	if vim.fn.isdirectory(base) == 1 then
+		subdirs = vim.fn.globpath(base, '*', false, true)
+		for _, p in ipairs(subdirs) do
+			p = vim.fs.normalize(p)
+			if vim.fn.isdirectory(p) == 1 and not seen[p] then
+				name = vim.fn.fnamemodify(p, ':t')
+				table.insert(vaults, { name = name, path = p })
+				seen[p] = true
+			end
+		end
+	end
+	reg = load_registered_vaults()
+	for _, p in ipairs(reg) do
+		p = vim.fs.normalize(p)
+		if vim.fn.isdirectory(p) == 1 and not seen[p] then
+			name = vim.fn.fnamemodify(p, ':t')
+			table.insert(vaults, { name = name, path = p })
+			seen[p] = true
+		end
+	end
+	return vaults
+end
+
+local function current_vault_root()
+	local cur, vaults, best, p
+
+	cur = vim.fn.expand('%:p')
+	if cur == '' then
+		cur = vim.fs.normalize(vim.fn.getcwd())
+	else
+		cur = vim.fs.normalize(vim.fn.fnamemodify(cur, ':h'))
+	end
+	vaults = list_vaults()
+	best = nil
+	for _, v in ipairs(vaults) do
+		p = v.path
+		if cur == p or cur:sub(1, #p + 1) == p .. '/' then
+			if not best or #p > #best then
+				best = p
+			end
+		end
+	end
+	return best
+end
+
+local function page_path(name)
+	local cur_dir, cand, root
+
+	cur_dir = vim.fn.expand('%:p:h')
+	cand = cur_dir .. '/' .. name .. '.md'
+	if vim.fn.filereadable(cand) == 1 then
+		return cand
+	end
+	root = current_vault_root()
+	if root and root ~= cur_dir then
+		cand = root .. '/' .. name .. '.md'
+		if vim.fn.filereadable(cand) == 1 then
+			return cand
+		end
+	end
+	return cur_dir .. '/' .. name .. '.md'
+end
+
 
 local function open_page(name, content)
 	local path, title, empty, lines, count, last
@@ -197,9 +325,10 @@ local function link_at_cursor()
 end
 
 local function complete_notes(lead)
-	local dir, files, cur, pfx, matches, note
+	local root, dir, files, cur, pfx, matches, note
 
-	dir = vim.fn.expand('%:p:h')
+	root = current_vault_root()
+	dir = root or vim.fn.expand('%:p:h')
 	files = vim.fn.globpath(dir, '**/*.md', false, true)
 	cur = vim.fn.expand('%:p')
 	pfx = dir .. '/'
@@ -417,12 +546,161 @@ vim.api.nvim_create_autocmd('FileType', {
 	end,
 })
 
+local function open_vault(path)
+	local idx, full_idx
+
+	path = vim.fs.normalize(path)
+	if vim.fn.isdirectory(path) == 0 then
+		vim.fn.mkdir(path, 'p')
+	end
+	register_vault(path)
+	if vim.g.miwiki_vault_lcd ~= false then
+		vim.cmd.lcd(path)
+	end
+	idx = vim.g.miwiki_index_name
+	if idx == nil then
+		idx = vim.g.miwiki_index or 'index.md'
+	end
+	if type(idx) == 'string' and vim.trim(idx) ~= '' then
+		idx = vim.trim(idx):gsub('%.md$', '')
+		full_idx = path .. '/' .. idx .. '.md'
+		vim.cmd.edit(full_idx)
+	else
+		vim.cmd.edit(path)
+	end
+end
+
+local function create_vault(arg)
+	local name, base, path
+
+	if type(arg) == 'table' then
+		name = arg.args and vim.trim(arg.args) or ''
+	elseif type(arg) == 'string' then
+		name = vim.trim(arg)
+	else
+		name = ''
+	end
+
+	base = default_vault_dir()
+	if name == '' then
+		vim.ui.input({ prompt = 'New vault name: ' }, function(input)
+			if input and vim.trim(input) ~= '' then
+				create_vault(input)
+			end
+		end)
+		return
+	end
+	path = base .. '/' .. name
+	open_vault(path)
+end
+
+local function init_cwd_vault(arg)
+	local name, cwd, path
+
+	if type(arg) == 'table' then
+		name = arg.args and vim.trim(arg.args) or ''
+	elseif type(arg) == 'string' then
+		name = vim.trim(arg)
+	else
+		name = ''
+	end
+
+	cwd = vim.fs.normalize(vim.fn.getcwd())
+	if name ~= '' then
+		path = cwd .. '/' .. name
+	else
+		path = cwd
+	end
+	open_vault(path)
+end
+
+local function choose_vault(arg)
+	local name, vaults, items, cwd, def_dir, tag
+
+	if type(arg) == 'table' then
+		name = arg.args and vim.trim(arg.args) or ''
+	elseif type(arg) == 'string' then
+		name = vim.trim(arg)
+	else
+		name = ''
+	end
+
+	vaults = list_vaults()
+	if name ~= '' then
+		for _, v in ipairs(vaults) do
+			if v.name:lower() == name:lower() or v.path == name then
+				open_vault(v.path)
+				return
+			end
+		end
+		create_vault(name)
+		return
+	end
+
+	cwd = vim.fs.normalize(vim.fn.getcwd())
+	def_dir = default_vault_dir()
+	items = {
+		{ label = '+ New vault in default dir (' .. def_dir .. ')', action = 'new_default' },
+		{ label = '+ Init vault in working dir (' .. cwd .. ')', action = 'init_cwd' },
+	}
+
+	for _, v in ipairs(vaults) do
+		tag = (v.path == cwd) and ' [cwd]' or ''
+		table.insert(items, {
+			label = v.name .. tag .. '  (' .. v.path .. ')',
+			vault = v,
+			action = 'open',
+		})
+	end
+
+	vim.ui.select(items, {
+		prompt = 'Miwiki Vaults:',
+		format_item = function(item)
+			return item.label
+		end,
+	}, function(choice)
+		if not choice then
+			return
+		end
+		if choice.action == 'new_default' then
+			create_vault()
+		elseif choice.action == 'init_cwd' then
+			init_cwd_vault()
+		elseif choice.action == 'open' then
+			open_vault(choice.vault.path)
+		end
+	end)
+end
+
+local function complete_vaults(lead)
+	local vaults, matches
+
+	vaults = list_vaults()
+	matches = {}
+	lead = (lead or ''):lower()
+	for _, v in ipairs(vaults) do
+		if lead == '' or v.name:lower():find(lead, 1, true) then
+			table.insert(matches, v.name)
+		end
+	end
+	table.sort(matches)
+	return matches
+end
+
+_G.miwiki_complete_vaults = complete_vaults
+
 local M = {
 	follow_or_create = follow_or_create,
 	follow_or_create_visual = follow_or_create_visual,
 	smart_action = smart_action,
 	move_to_note = move_to_note,
 	complete_notes = complete_notes,
+	complete_vaults = complete_vaults,
+	choose_vault = choose_vault,
+	create_vault = create_vault,
+	init_cwd_vault = init_cwd_vault,
+	open_vault = open_vault,
+	list_vaults = list_vaults,
 }
 
 return M
