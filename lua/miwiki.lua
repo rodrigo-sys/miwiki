@@ -77,7 +77,7 @@ local function visual_range()
 end
 
 local function default_vault_dir()
-	return vim.fs.normalize(vim.fn.expand(vim.g.miwiki_vault_dir or '~/notes'))
+	return vim.fs.normalize(vim.fn.expand(vim.g.miwiki_vault_dir or '~/miwiki'))
 end
 
 local function registry_file()
@@ -547,7 +547,7 @@ vim.api.nvim_create_autocmd('FileType', {
 })
 
 local function open_vault(path)
-	local idx, full_idx
+	local idx, full_idx, empty, title, lines
 
 	path = vim.fs.normalize(path)
 	if vim.fn.isdirectory(path) == 0 then
@@ -564,7 +564,19 @@ local function open_vault(path)
 	if type(idx) == 'string' and vim.trim(idx) ~= '' then
 		idx = vim.trim(idx):gsub('%.md$', '')
 		full_idx = path .. '/' .. idx .. '.md'
+		empty = vim.fn.filereadable(full_idx) == 0
+		if vim.bo.modified and vim.fn.expand('%') ~= '' then
+			vim.cmd.write()
+		end
 		vim.cmd.edit(full_idx)
+		empty = empty or (vim.fn.line('$') == 1
+		    and vim.api.nvim_get_current_line() == '')
+		if empty then
+			title = vim.fn.fnamemodify(path, ':t')
+			lines = { '# ' .. title, '', '' }
+			vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
+			vim.api.nvim_win_set_cursor(0, { 3, 0 })
+		end
 	else
 		vim.cmd.edit(path)
 	end
