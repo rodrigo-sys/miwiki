@@ -17,9 +17,3 @@ vim.api.nvim_create_user_command('MiwikiMove', miwiki.move_to_note, {
 	desc = 'Move selected content to a note',
 })
 
-vim.api.nvim_create_user_command('MiwikiExtract', miwiki.move_to_note, {
-	range = true,
-	nargs = '?',
-	complete = miwiki.complete_notes,
-	desc = 'Extract selected content to a note',
-})
