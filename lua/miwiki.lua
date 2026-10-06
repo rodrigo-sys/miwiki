@@ -208,7 +208,7 @@ local function complete_notes(lead)
 	for _, f in ipairs(files) do
 		if f ~= cur and f:sub(1, #pfx) == pfx then
 			note = f:sub(#pfx + 1):gsub('%.md$', '')
-			if lead == '' or note:lower():find(lead, 1, true) == 1 then
+			if lead == '' or note:lower():find(lead, 1, true) then
 				table.insert(matches, note)
 			end
 		end
@@ -216,6 +216,8 @@ local function complete_notes(lead)
 	table.sort(matches)
 	return matches
 end
+
+_G.miwiki_complete_notes = complete_notes
 
 local function cut_selection(opts, name)
 	local p1, p2, mode, l1, l2, charwise, eline, ecol, nchar, lines, link
@@ -287,7 +289,7 @@ local function move_to_note(opts)
 	end
 	vim.ui.input({
 		prompt = 'Note name: ',
-		completion = 'customlist,v:lua.require"miwiki".complete_notes',
+		completion = 'customlist,v:lua.miwiki_complete_notes',
 	}, function(input)
 		if input then
 			do_move(opts, input)
