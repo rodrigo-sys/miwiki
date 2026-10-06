@@ -42,17 +42,20 @@ local function word_at_cursor()
 	return s, e, line:sub(s, e)
 end
 
-local function wrap_range(s, e, text)
+local function replace_range(s, e, text)
 	local line
 
 	line = vim.api.nvim_get_current_line()
-	line = line:sub(1, s - 1) .. '[[' .. text .. ']]'
-	    .. line:sub(e + 1)
+	line = line:sub(1, s - 1) .. text .. line:sub(e + 1)
 	vim.api.nvim_set_current_line(line)
 end
 
+local function wrap_range(s, e, text)
+	replace_range(s, e, '[[' .. text .. ']]')
+end
+
 local function visual_range()
-	local a, b, sr, sc, er, ec, text
+	local a, b, sr, sc, er, ec, raw, text, lead, trail
 
 	a = vim.fn.getpos('v')
 	b = vim.fn.getpos('.')
@@ -63,13 +66,28 @@ local function visual_range()
 	if sr ~= er then
 		return nil
 	end
-	if vim.o.selection == 'exclusive' then
+	raw = vim.fn.getline(sr)
+	if vim.fn.mode() == 'V' then
+		sc = 1
+		ec = #raw
+	elseif vim.o.selection == 'exclusive' then
 		ec = ec - 1
 	end
 	if ec < sc then
 		return nil
 	end
-	text = vim.trim(vim.fn.getline(sr):sub(sc, ec))
+	lead = raw:sub(sc, ec):match('^(%s*)')
+	if lead and #lead > 0 then
+		sc = sc + #lead
+	end
+	trail = raw:sub(sc, ec):match('(%s*)$')
+	if trail and #trail > 0 then
+		ec = ec - #trail
+	end
+	if ec < sc then
+		return nil
+	end
+	text = raw:sub(sc, ec)
 	if text == '' then
 		return nil
 	end
@@ -253,6 +271,9 @@ end
 local function is_url(target)
 	local tld
 
+	if target:match('%s') then
+		return false
+	end
 	if target:match('^%a[%w+.-]*://') or target:match('^www%.')
 	    or target:match('^mailto:') then
 		return true
@@ -268,6 +289,72 @@ local function is_url(target)
 		end
 	end
 	return false
+end
+
+local function decode_entities(s)
+	s = s:gsub('&amp;', '&')
+	s = s:gsub('&lt;', '<')
+	s = s:gsub('&gt;', '>')
+	s = s:gsub('&quot;', '"')
+	s = s:gsub('&#39;', "'")
+	s = s:gsub('&apos;', "'")
+	s = s:gsub('&nbsp;', ' ')
+	s = s:gsub('&#x(%x+);', function(h)
+		local num = tonumber(h, 16)
+		return num and vim.fn.nr2char(num) or nil
+	end)
+	s = s:gsub('&#(%d+);', function(d)
+		local num = tonumber(d, 10)
+		return num and vim.fn.nr2char(num) or nil
+	end)
+	return s
+end
+
+local function extract_title(html)
+	local raw, title
+
+	raw = html:match('<[tT][iI][tT][lL][eE][^>]*>(.-)</[tT][iI][tT][lL][eE]>')
+	if not raw then
+		return nil
+	end
+	title = raw:gsub('<[^>]+>', '')
+	title = decode_entities(title)
+	title = title:gsub('%s+', ' ')
+	title = vim.trim(title)
+	if title == '' then
+		return nil
+	end
+	title = title:gsub('%[', '\\['):gsub('%]', '\\]')
+	return title
+end
+
+local function fetch_title(url)
+	local timeout, cmd, obj, stdout
+
+	if vim.fn.executable('curl') ~= 1 then
+		return nil
+	end
+	timeout = tostring(vim.g.miwiki_curl_timeout or 5)
+	cmd = {
+		'curl',
+		'-sL',
+		'--max-time', timeout,
+		'-A', 'Mozilla/5.0',
+		url,
+	}
+	if vim.system then
+		obj = vim.system(cmd):wait()
+		if not obj or obj.code ~= 0 or not obj.stdout then
+			return nil
+		end
+		stdout = obj.stdout
+	else
+		stdout = vim.fn.system(cmd)
+		if vim.v.shell_error ~= 0 then
+			return nil
+		end
+	end
+	return extract_title(stdout)
 end
 
 local function open_link(target)
@@ -498,7 +585,7 @@ local function follow_or_create()
 end
 
 local function follow_or_create_visual()
-	local target, s, e, text
+	local target, s, e, text, clean, url, title, link
 
 	target = link_at_cursor()
 	if target then
@@ -513,6 +600,17 @@ local function follow_or_create_visual()
 		return false
 	end
 	vim.api.nvim_feedkeys('\27', 'nx', false)
+	clean = text:match('^<(.+)>$') or text
+	if is_url(clean) then
+		url = (clean:match('^%a+://') or clean:match('^mailto:'))
+		    and clean or ('https://' .. clean)
+		title = (not clean:match('^mailto:')) and fetch_title(url) or clean
+		title = title or clean
+		link = '[' .. title .. '](' .. url .. ')'
+		replace_range(s, e, link)
+		vim.api.nvim_win_set_cursor(0, { vim.fn.line('.'), s - 1 })
+		return true
+	end
 	wrap_range(s, e, text)
 	open_page(text)
 	return true
@@ -713,6 +811,8 @@ local M = {
 	init_cwd_vault = init_cwd_vault,
 	open_vault = open_vault,
 	list_vaults = list_vaults,
+	fetch_title = fetch_title,
+	is_url = is_url,
 }
 
 return M
